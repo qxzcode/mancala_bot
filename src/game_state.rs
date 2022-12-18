@@ -70,7 +70,9 @@ impl GameState {
     /// Given the current player's hole selection, updates the game state;
     /// or, if the game ends, returns (P1 score) - (P2 score).
     /// Panics if `hole >= HOLES_PER_SIDE` or the selected hole is empty.
-    pub fn make_move(&mut self, hole: usize) -> Result<(), i8> {
+    pub fn make_move(&mut self, hole: usize) -> Option<i8> {
+        debug_assert!(self.result().is_none()); // assert that this is not a terminal state
+
         let cur_player = self.cur_player;
 
         // take the stones out of the selected hole
@@ -102,7 +104,7 @@ impl GameState {
 
         if player == cur_player {
             if let Some(hole) = hole {
-                if self.player(cur_player).holes[hole] == 0 {
+                if self.player(cur_player).holes[hole] == 1 {
                     // the last stone landed in an empty hole on the current player's side;
                     // capture any stones in the opposite hole
                     let other_hole_idx = (HOLES_PER_SIDE - 1) - hole;
@@ -117,18 +119,22 @@ impl GameState {
             }
         }
 
-        // check for end condition
+        // finally, toggle whose turn it is and return the game result if any
+        self.cur_player = self.cur_player.other();
+        self.result()
+    }
+
+    /// Returns the final game result Some((P1 score) - (P2 score)), or None
+    /// if the game is not yet over in this state.
+    pub fn result(&self) -> Option<i8> {
         let p1_stones = self.p1_state.stones_in_holes();
         let p2_stones = self.p2_state.stones_in_holes();
         if p1_stones == 0 || p2_stones == 0 {
             let p1_score = self.p1_state.store + p1_stones;
             let p2_score = self.p2_state.store + p2_stones;
-            return Err((p1_score as i8) - (p2_score as i8));
+            return Some((p1_score as i8) - (p2_score as i8)); // the game is over with this score
         }
-
-        // finally, toggle whose turn it is
-        self.cur_player = self.cur_player.other();
-        Ok(())
+        None // the game isn't over yet
     }
 }
 
@@ -155,5 +161,15 @@ impl PlayerState {
     /// Returns the total number of stones in the holes on this player's side.
     pub fn stones_in_holes(&self) -> u8 {
         self.holes.iter().sum()
+    }
+
+    /// Returns an iterator over the indices of the non-empty holes on this
+    /// player's side.
+    pub fn non_empty_holes(&self) -> impl Iterator<Item = usize> + '_ {
+        self.holes
+            .iter()
+            .enumerate()
+            .filter(|(_i, h)| **h > 0)
+            .map(|(i, _)| i)
     }
 }
