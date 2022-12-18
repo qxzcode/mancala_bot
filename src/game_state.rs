@@ -10,6 +10,7 @@ pub enum Player {
 
 impl Player {
     /// Returns the other player.
+    #[must_use]
     pub fn other(&self) -> Player {
         match self {
             Player::Player1 => Player::Player2,
@@ -28,7 +29,7 @@ pub const INITIAL_STONES_PER_HOLE: u8 = 4;
 const_assert!(HOLES_PER_SIDE * 2 * (INITIAL_STONES_PER_HOLE as usize) <= (i8::MAX as usize));
 
 /// Represents a game state.
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct GameState {
     /// Which player's turn it currently is.
     pub cur_player: Player,
@@ -52,6 +53,7 @@ impl Default for GameState {
 
 impl GameState {
     /// Returns a reference to the state for the given player.
+    #[must_use]
     pub fn player(&self, player: Player) -> &PlayerState {
         match player {
             Player::Player1 => &self.p1_state,
@@ -60,6 +62,7 @@ impl GameState {
     }
 
     /// Returns a mutable reference to the state for the given player.
+    #[must_use]
     pub fn player_mut(&mut self, player: Player) -> &mut PlayerState {
         match player {
             Player::Player1 => &mut self.p1_state,
@@ -70,14 +73,16 @@ impl GameState {
     /// Given the current player's hole selection, updates the game state;
     /// or, if the game ends, returns (P1 score) - (P2 score).
     /// Panics if `hole >= HOLES_PER_SIDE` or the selected hole is empty.
+    #[must_use]
     pub fn make_move(&mut self, hole: usize) -> Option<i8> {
         debug_assert!(self.result().is_none()); // assert that this is not a terminal state
 
         let cur_player = self.cur_player;
 
         // take the stones out of the selected hole
+        assert!(hole < HOLES_PER_SIDE, "invalid hole index: {hole}");
         let mut num_stones = mem::take(&mut self.player_mut(cur_player).holes[hole]) as usize;
-        assert!(num_stones > 0);
+        assert!(num_stones > 0, "selected an empty hole");
 
         let mut player = self.cur_player;
         let mut hole = Some(hole);
@@ -126,6 +131,7 @@ impl GameState {
 
     /// Returns the final game result Some((P1 score) - (P2 score)), or None
     /// if the game is not yet over in this state.
+    #[must_use]
     pub fn result(&self) -> Option<i8> {
         let p1_stones = self.p1_state.stones_in_holes();
         let p2_stones = self.p2_state.stones_in_holes();
@@ -136,10 +142,16 @@ impl GameState {
         }
         None // the game isn't over yet
     }
+
+    /// Returns an iterator over the valid moves that can be made from this
+    /// state, in ascending order.
+    pub fn valid_moves(&self) -> impl Iterator<Item = usize> + '_ {
+        self.player(self.cur_player).non_empty_holes()
+    }
 }
 
 /// Represents the state for a single player (their holes and store).
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct PlayerState {
     /// The player's holes. Index 0 is closest to this player's store.
     pub holes: [u8; HOLES_PER_SIDE],
@@ -159,12 +171,13 @@ impl Default for PlayerState {
 
 impl PlayerState {
     /// Returns the total number of stones in the holes on this player's side.
+    #[must_use]
     pub fn stones_in_holes(&self) -> u8 {
         self.holes.iter().sum()
     }
 
     /// Returns an iterator over the indices of the non-empty holes on this
-    /// player's side.
+    /// player's side, in ascending order.
     pub fn non_empty_holes(&self) -> impl Iterator<Item = usize> + '_ {
         self.holes
             .iter()
