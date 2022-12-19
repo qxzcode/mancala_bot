@@ -1,5 +1,9 @@
 use std::time::Duration;
 
+use egui::{
+    Align, Button, CentralPanel, CursorIcon, Direction, FontFamily, FontId, Layout, Response,
+    SidePanel, Slider, Ui, Vec2, Widget,
+};
 use rand::seq::IteratorRandom;
 
 use crate::{
@@ -8,24 +12,33 @@ use crate::{
 };
 
 pub struct MancalaApp {
+    /// Whether UI debug mode is enabled.
     debug: bool,
-    game_state: GameState,
+
+    /// The history of game states.
+    history: Vec<GameState>,
+
+    /// The index of the active game state in `self.history`.
+    active_state_index: usize,
+
+    /// The current MCTS execution context.
     mcts_context: MCTSContext,
 }
 
 impl MancalaApp {
+    /// Initializes an instance of the app.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         MancalaApp::set_styles(&cc.egui_ctx);
         Self {
             debug: false,
-            game_state: GameState::default(),
+            history: vec![GameState::default()],
+            active_state_index: 0,
             mcts_context: MCTSContext::new(Duration::from_secs_f64(1.0)),
         }
     }
 
+    /// Sets up the app's styles and such.
     fn set_styles(ctx: &egui::Context) {
-        use egui::FontFamily;
-        use egui::FontId;
         use egui::TextStyle::*;
 
         // scale the whole UI
@@ -47,6 +60,11 @@ impl MancalaApp {
         // Mutate global style with above changes
         ctx.set_style(style);
     }
+
+    /// Returns the active `GameState`.
+    fn active_state(&mut self) -> &mut GameState {
+        &mut self.history[self.active_state_index]
+    }
 }
 
 impl eframe::App for MancalaApp {
@@ -57,7 +75,7 @@ impl eframe::App for MancalaApp {
             ..
         } = self;
 
-        egui::SidePanel::left("side_panel").show(ctx, |ui| {
+        SidePanel::left("side_panel").show(ctx, |ui| {
             egui::warn_if_debug_build(ui);
             ui.heading("Side Panel");
 
@@ -66,7 +84,7 @@ impl eframe::App for MancalaApp {
 
             ui.label("MCTS think time (sec):");
             let mut seconds = mcts_context.choice_time_limit.as_secs_f64();
-            let slider = egui::Slider::new(&mut seconds, 0.0..=10.0).clamp_to_range(false);
+            let slider = Slider::new(&mut seconds, 0.0..=10.0).clamp_to_range(false);
             if ui.add(slider).changed() {
                 mcts_context.choice_time_limit = Duration::from_secs_f64(seconds);
             }
@@ -74,14 +92,15 @@ impl eframe::App for MancalaApp {
             ui.label(format!("Node cache size:\n{}", mcts_context.cache_size()));
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        CentralPanel::default().show(ctx, |ui| {
             ui.heading("Current Game State");
 
-            ui.add(&mut self.game_state);
+            ui.add(self.active_state());
 
             if ui.button("MCTS move").clicked() {
-                let move_to_make = mcts_context.mcts_choose(&self.game_state);
-                if let Some(score) = self.game_state.make_move(move_to_make) {
+                let game_state = self.active_state().clone();
+                let move_to_make = self.mcts_context.mcts_choose(&game_state);
+                if let Some(score) = self.active_state().make_move(move_to_make) {
                     println!("END: {score}");
                 }
             }
@@ -89,8 +108,8 @@ impl eframe::App for MancalaApp {
     }
 }
 
-impl egui::Widget for &mut GameState {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+impl Widget for &mut GameState {
+    fn ui(self, ui: &mut Ui) -> Response {
         let mut move_to_make = None;
 
         let res = ui
@@ -106,7 +125,7 @@ impl egui::Widget for &mut GameState {
                 ui.label(self.p2_state.store.to_string());
 
                 ui.columns(2, |columns| {
-                    let mut add_holes = |ui: &mut egui::Ui, player_state: &PlayerState| {
+                    let mut add_holes = |ui: &mut Ui, player_state: &PlayerState| {
                         for (hole_index, &stones) in player_state.holes.iter().enumerate() {
                             if ui.add(hole_button(stones)).clicked() {
                                 move_to_make = Some(hole_index);
@@ -115,13 +134,13 @@ impl egui::Widget for &mut GameState {
                     };
 
                     columns[1].set_enabled(self.cur_player == Player::Player2);
-                    columns[1].with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    columns[1].with_layout(Layout::top_down(Align::LEFT), |ui| {
                         add_holes(ui, &self.p2_state);
                     });
 
                     columns[0].set_enabled(self.cur_player == Player::Player1);
                     columns[0].set_height(columns[1].min_rect().height());
-                    columns[0].with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
+                    columns[0].with_layout(Layout::bottom_up(Align::RIGHT), |ui| {
                         add_holes(ui, &self.p1_state);
                     });
                 });
@@ -151,22 +170,21 @@ impl egui::Widget for &mut GameState {
     }
 }
 
-fn hole_button_ui(ui: &mut egui::Ui, stones: u8) -> egui::Response {
-    let base_size = egui::Vec2::new(22.0, 20.0);
-    let padding = egui::Vec2::new(4.0, 4.0);
-    let total_size = base_size + padding;
+fn hole_button_ui(ui: &mut Ui, stones: u8) -> Response {
+    let base_size = Vec2::new(22.0, 20.0);
+    let padding = Vec2::new(4.0, 4.0);
+    let button_size = base_size + padding;
 
-    let button = egui::Button::new(stones.to_string()).min_size(total_size);
+    let button = Button::new(stones.to_string()).min_size(button_size);
 
-    let button_size = total_size;
-    let button_layout = egui::Layout::centered_and_justified(egui::Direction::LeftToRight);
+    let button_layout = Layout::centered_and_justified(Direction::LeftToRight);
     ui.allocate_ui_with_layout(button_size, button_layout, |ui| {
         ui.add_enabled(stones > 0, button)
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_cursor(CursorIcon::PointingHand)
     })
     .inner
 }
 
-pub fn hole_button(stones: u8) -> impl egui::Widget {
-    move |ui: &mut egui::Ui| hole_button_ui(ui, stones)
+pub fn hole_button(stones: u8) -> impl Widget {
+    move |ui: &mut Ui| hole_button_ui(ui, stones)
 }
