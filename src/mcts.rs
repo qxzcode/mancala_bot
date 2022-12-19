@@ -50,7 +50,7 @@ impl OptionStats {
         if self.num_rollouts == 0 {
             NotNan::new(0.0).unwrap()
         } else {
-            let expected_score = (self.total_score as f64) / ((self.num_rollouts * 2) as f64);
+            let expected_score = (self.total_score as f64) / (self.num_rollouts as f64);
             NotNan::new(expected_score).expect("expected score is NaN")
         }
     }
@@ -66,7 +66,7 @@ impl OptionStats {
     /// A variant of the PUCT score, similar to that used in AlphaZero.
     #[must_use]
     pub fn puct_score(&self, parent_rollouts: u32) -> NotNan<f64> {
-        let exploration_rate = 1.0; // TODO: make this a tunable parameter
+        let exploration_rate = 15.0; // TODO: make this a tunable parameter
         let exploration_score =
             exploration_rate * (parent_rollouts as f64).sqrt() / ((1 + self.num_rollouts) as f64);
         self.expected_score() + exploration_score
