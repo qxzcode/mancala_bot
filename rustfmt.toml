@@ -1,0 +1,2 @@
+struct_lit_width = 35
+fn_call_width = 80

@@ -976,6 +976,7 @@ dependencies = [
 name = "mancala_bot"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "eframe",
  "egui",
  "itertools",

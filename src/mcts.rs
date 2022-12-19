@@ -1,3 +1,4 @@
+use arrayvec::ArrayVec;
 use itertools::Itertools;
 use ordered_float::NotNan;
 use rand::seq::IteratorRandom;
@@ -7,7 +8,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crate::game_state::{GameState, Player};
+use crate::game_state::{GameState, Player, HOLES_PER_SIDE};
 
 /// Performs a randomized rollout from the given state and returns the final
 /// score for Player 1.
@@ -37,10 +38,17 @@ pub fn get_best_options(option_stats_arr: &[OptionStats]) -> impl Iterator<Item 
         .map(|(option_index, _)| option_index)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+#[repr(packed)]
 pub struct OptionStats {
     pub num_rollouts: u32,
     pub total_score: i64,
+}
+
+impl Default for OptionStats {
+    fn default() -> Self {
+        Self { num_rollouts: 0, total_score: 0 }
+    }
 }
 
 impl OptionStats {
@@ -75,7 +83,7 @@ impl OptionStats {
 
 #[derive(Debug, Clone)]
 struct StateStats {
-    options: Box<[OptionStats]>,
+    options: ArrayVec<OptionStats, HOLES_PER_SIDE>,
     num_rollouts: u32,
     last_visit_ply: u32,
 }
@@ -85,14 +93,9 @@ impl StateStats {
     fn new(num_options: usize, current_ply: u32) -> Self {
         debug_assert!(num_options > 1, "Expanded a state with less than 2 options");
         Self {
-            options: vec![
-                OptionStats {
-                    num_rollouts: 0,
-                    total_score: 0,
-                };
-                num_options
-            ]
-            .into(),
+            options: ArrayVec::from_iter(
+                std::iter::repeat_with(OptionStats::default).take(num_options),
+            ),
             num_rollouts: 0,
             last_visit_ply: current_ply,
         }

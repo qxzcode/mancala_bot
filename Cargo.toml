@@ -10,3 +10,8 @@ rand = "0.8"
 static_assertions = "1.1"
 ordered-float = "3.4"
 itertools = "0.10"
+arrayvec = "0.7"
+
+# [profile.release]
+# codegen-units = 1
+# lto = true
