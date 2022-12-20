@@ -1,11 +1,11 @@
+use ahash::AHashMap;
 use arrayvec::ArrayVec;
 use itertools::Itertools;
 use ordered_float::NotNan;
-use rand::seq::IteratorRandom;
+use rand::seq::{IteratorRandom, SliceRandom};
 use rand::{thread_rng, Rng};
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::game_state::{GameState, Player, HOLES_PER_SIDE};
@@ -17,7 +17,12 @@ pub fn compute_rollout_score(mut game_state: GameState) -> i8 {
     let mut rng = thread_rng();
 
     loop {
-        let random_move = game_state.valid_moves().choose(&mut rng).unwrap();
+        let valid_moves = game_state
+            .valid_moves()
+            .collect::<ArrayVec<_, HOLES_PER_SIDE>>();
+        let random_move = *valid_moves
+            .choose(&mut rng)
+            .expect("GameState should have at least one valid move");
         if let Some(score) = game_state.make_move(random_move) {
             return score;
         }
@@ -29,7 +34,7 @@ pub fn get_best_options(option_stats_arr: &[OptionStats]) -> impl Iterator<Item 
         .iter()
         .map(|option_stats| option_stats.num_rollouts)
         .max()
-        .expect("option_stats_vec is empty");
+        .expect("option_stats_arr is empty");
 
     option_stats_arr
         .iter()
@@ -99,7 +104,7 @@ impl StateStats {
 pub struct MCTSContext {
     pub choice_time_limit: Duration,
 
-    explored_states: HashMap<GameState, StateStats>,
+    explored_states: AHashMap<GameState, StateStats>,
     current_ply: u32,
 }
 
@@ -108,7 +113,7 @@ impl MCTSContext {
     pub fn new(choice_time_limit: Duration) -> Self {
         Self {
             choice_time_limit,
-            explored_states: HashMap::new(),
+            explored_states: AHashMap::new(),
             current_ply: 0,
         }
     }
@@ -182,7 +187,9 @@ impl MCTSContext {
     /// Samples a move that a player might make from a state, updating the search tree.
     /// Returns the rollout score for Player 1.
     fn sample_move(&mut self, game_state: GameState) -> i8 {
-        let valid_moves = game_state.valid_moves().collect_vec();
+        let valid_moves = game_state
+            .valid_moves()
+            .collect::<ArrayVec<_, HOLES_PER_SIDE>>();
         let num_options = valid_moves.len();
 
         // immediately continue to the next move if there's only one option
