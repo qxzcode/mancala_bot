@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use egui::{
-    Align, Button, CentralPanel, CursorIcon, Direction, FontFamily, FontId, Layout, Response,
-    SidePanel, Slider, Ui, Vec2, Widget,
+    vec2, Align, Button, CentralPanel, CursorIcon, Direction, FontFamily, FontId, Layout, Rect,
+    Response, Sense, SidePanel, Slider, Stroke, Ui, Widget,
 };
 use rand::seq::IteratorRandom;
 
@@ -69,11 +69,7 @@ impl MancalaApp {
 
 impl eframe::App for MancalaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let Self {
-            debug,
-            mcts_context,
-            ..
-        } = self;
+        let Self { debug, mcts_context, .. } = self;
 
         SidePanel::left("side_panel").show(ctx, |ui| {
             egui::warn_if_debug_build(ui);
@@ -95,6 +91,8 @@ impl eframe::App for MancalaApp {
         CentralPanel::default().show(ctx, |ui| {
             ui.heading("Current Game State");
 
+            let old_cur_player = self.active_state().cur_player;
+
             ui.add(self.active_state());
 
             if ui.button("MCTS move").clicked() {
@@ -103,6 +101,12 @@ impl eframe::App for MancalaApp {
                 if let Some(score) = self.active_state().make_move(move_to_make) {
                     println!("END: {score}");
                 }
+            }
+
+            // if the current player has changed, reset animations to prevent briefly leaking
+            // previous values from the last time this player was active
+            if self.active_state().cur_player != old_cur_player {
+                ui.ctx().clear_animations();
             }
         });
     }
@@ -125,9 +129,9 @@ impl Widget for &mut GameState {
                 ui.label(self.p2_state.store.to_string());
 
                 ui.columns(2, |columns| {
-                    let mut add_holes = |ui: &mut Ui, player_state: &PlayerState| {
+                    let mut add_holes = |ui: &mut Ui, player_state: &PlayerState, on_left: bool| {
                         for (hole_index, &stones) in player_state.holes.iter().enumerate() {
-                            if ui.add(hole_button(stones)).clicked() {
+                            if ui.add(hole(stones, on_left)).clicked() {
                                 move_to_make = Some(hole_index);
                             }
                         }
@@ -135,13 +139,13 @@ impl Widget for &mut GameState {
 
                     columns[1].set_enabled(self.cur_player == Player::Player2);
                     columns[1].with_layout(Layout::top_down(Align::LEFT), |ui| {
-                        add_holes(ui, &self.p2_state);
+                        add_holes(ui, &self.p2_state, false);
                     });
 
                     columns[0].set_enabled(self.cur_player == Player::Player1);
                     columns[0].set_height(columns[1].min_rect().height());
                     columns[0].with_layout(Layout::bottom_up(Align::RIGHT), |ui| {
-                        add_holes(ui, &self.p1_state);
+                        add_holes(ui, &self.p1_state, true);
                     });
                 });
 
@@ -170,21 +174,69 @@ impl Widget for &mut GameState {
     }
 }
 
-fn hole_button_ui(ui: &mut Ui, stones: u8) -> Response {
-    let base_size = Vec2::new(22.0, 20.0);
-    let padding = Vec2::new(4.0, 4.0);
-    let button_size = base_size + padding;
+/// A widget that displays the button representing a hole on the game board.
+pub fn hole_button(stones: u8) -> impl Widget {
+    move |ui: &mut Ui| {
+        let base_size = vec2(22.0, 20.0);
+        let padding = vec2(4.0, 4.0);
+        let button_size = base_size + padding;
 
-    let button = Button::new(stones.to_string()).min_size(button_size);
+        let button = Button::new(stones.to_string()).min_size(button_size);
 
-    let button_layout = Layout::centered_and_justified(Direction::LeftToRight);
-    ui.allocate_ui_with_layout(button_size, button_layout, |ui| {
         ui.add_enabled(stones > 0, button)
             .on_hover_cursor(CursorIcon::PointingHand)
-    })
-    .inner
+    }
 }
 
-pub fn hole_button(stones: u8) -> impl Widget {
-    move |ui: &mut Ui| hole_button_ui(ui, stones)
+/// A widget that displays a bar indicating a quantity. Fills the available width.
+pub fn value_bar(value: f32, max_value: f32, direction: Direction) -> impl Widget {
+    move |ui: &mut Ui| {
+        let width = ui.available_size_before_wrap().x;
+        let height = ui.spacing().interact_size.y;
+        let (outer_rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+
+        if ui.is_rect_visible(response.rect) {
+            let visuals = ui.style().visuals.clone();
+            let rounding = outer_rect.height() / 4.0;
+            let proportion = (value / max_value).clamp(0.0, 1.0);
+            let proportion = ui
+                .ctx()
+                .animate_value_with_time(response.id, proportion, 0.1);
+
+            ui.painter()
+                .rect(outer_rect, rounding, visuals.extreme_bg_color, Stroke::NONE);
+
+            let inner_size = vec2(outer_rect.width() * proportion, outer_rect.height());
+            let inner_rect = match direction {
+                Direction::LeftToRight => Rect::from_min_size(outer_rect.min, inner_size),
+                Direction::RightToLeft => {
+                    Rect::from_min_max(outer_rect.max - inner_size, outer_rect.max)
+                }
+                direction => unimplemented!("value_bar with direction {direction:?}"),
+            };
+            ui.painter()
+                .rect(inner_rect, rounding, visuals.selection.bg_fill, Stroke::NONE);
+        }
+
+        response
+    }
+}
+
+/// A widget that displays a hole in the game board along with its extra information.
+pub fn hole(stones: u8, on_left: bool) -> impl Widget {
+    move |ui: &mut Ui| {
+        let size = vec2(ui.available_width(), 22.0 + 4.0);
+        let direction = if on_left {
+            Direction::RightToLeft
+        } else {
+            Direction::LeftToRight
+        };
+        let layout = Layout::from_main_dir_and_cross_align(direction, Align::Center);
+        ui.allocate_ui_with_layout(size, layout, |ui| {
+            let button_response = ui.add(hole_button(stones));
+            ui.add_visible(ui.is_enabled(), value_bar(stones as f32, 6.0, direction));
+            button_response
+        })
+        .inner
+    }
 }

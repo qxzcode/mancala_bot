@@ -38,27 +38,21 @@ pub fn get_best_options(option_stats_arr: &[OptionStats]) -> impl Iterator<Item 
         .map(|(option_index, _)| option_index)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[repr(packed)]
 pub struct OptionStats {
     pub num_rollouts: u32,
     pub total_score: i64,
 }
 
-impl Default for OptionStats {
-    fn default() -> Self {
-        Self { num_rollouts: 0, total_score: 0 }
-    }
-}
-
 impl OptionStats {
     /// Returns the estimated expected score for this option.
     #[must_use]
-    pub fn expected_score(&self) -> NotNan<f64> {
+    pub fn expected_score(&self) -> NotNan<f32> {
         if self.num_rollouts == 0 {
             NotNan::new(0.0).unwrap()
         } else {
-            let expected_score = (self.total_score as f64) / (self.num_rollouts as f64);
+            let expected_score = (self.total_score as f32) / (self.num_rollouts as f32);
             NotNan::new(expected_score).expect("expected score is NaN")
         }
     }
@@ -66,17 +60,17 @@ impl OptionStats {
     /// The UCB1 score for a choice.
     /// https://gibberblot.github.io/rl-notes/single-agent/multi-armed-bandits.html
     #[must_use]
-    pub fn ucb1_score(&self, rollout_num: usize) -> NotNan<f64> {
+    pub fn ucb1_score(&self, rollout_num: usize) -> NotNan<f32> {
         self.expected_score()
-            + (2.0 * (rollout_num as f64).ln() / (self.num_rollouts as f64)).sqrt()
+            + (2.0 * (rollout_num as f32).ln() / (self.num_rollouts as f32)).sqrt()
     }
 
     /// A variant of the PUCT score, similar to that used in AlphaZero.
     #[must_use]
-    pub fn puct_score(&self, parent_rollouts: u32) -> NotNan<f64> {
+    pub fn puct_score(&self, parent_rollouts: u32) -> NotNan<f32> {
         let exploration_rate = 15.0; // TODO: make this a tunable parameter
         let exploration_score =
-            exploration_rate * (parent_rollouts as f64).sqrt() / ((1 + self.num_rollouts) as f64);
+            exploration_rate * (parent_rollouts as f32).sqrt() / ((1 + self.num_rollouts) as f32);
         self.expected_score() + exploration_score
     }
 }
