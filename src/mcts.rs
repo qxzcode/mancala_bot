@@ -17,15 +17,17 @@ pub fn compute_rollout_score(mut game_state: GameState) -> i8 {
     let mut rng = thread_rng();
 
     loop {
+        if let Some(score) = game_state.result() {
+            return score;
+        }
+
         let valid_moves = game_state
             .valid_moves()
             .collect::<ArrayVec<_, HOLES_PER_SIDE>>();
         let random_move = *valid_moves
             .choose(&mut rng)
             .expect("GameState should have at least one valid move");
-        if let Some(score) = game_state.make_move(random_move) {
-            return score;
-        }
+        game_state.make_move(random_move);
     }
 }
 
@@ -168,19 +170,22 @@ impl MCTSContext {
     /// Samples a move that a player might make from a state, updating the search tree.
     /// Returns the rollout score for Player 1.
     fn sample_move(&mut self, game_state: GameState) -> i8 {
+        // return the game result if this is a terminal state
+        if let Some(score) = game_state.result() {
+            return score;
+        }
+
         let valid_moves = game_state
             .valid_moves()
             .collect::<ArrayVec<_, HOLES_PER_SIDE>>();
         let num_options = valid_moves.len();
 
-        // immediately continue to the next move if there's only one option
+        // if there's only one option, immediately continue to the next move (without consulting or
+        // updating the search tree)
         if num_options == 1 {
             let mut game_state = game_state;
-            let score = match game_state.make_move(valid_moves[0]) {
-                Some(score) => score,
-                None => self.sample_move(game_state),
-            };
-            return score;
+            game_state.make_move(valid_moves[0]);
+            return self.sample_move(game_state);
         }
 
         // get which player needs to make a move
@@ -209,10 +214,8 @@ impl MCTSContext {
 
                 // perform a rollout from this state
                 let mut game_state = game_state;
-                let score = match game_state.make_move(next_move) {
-                    Some(score) => score,
-                    None => compute_rollout_score(game_state),
-                };
+                game_state.make_move(next_move);
+                let score = compute_rollout_score(game_state);
 
                 // update the stats for this option
                 update_state_stats(state_stats, option_index, score);
@@ -237,10 +240,8 @@ impl MCTSContext {
 
                 // get the next state and recurse (or return the result if the game ended)
                 let mut game_state2 = game_state.clone();
-                let score = match game_state2.make_move(next_move) {
-                    Some(score) => score,
-                    None => self.sample_move(game_state2),
-                };
+                game_state2.make_move(next_move);
+                let score = self.sample_move(game_state2);
 
                 // update the stats for this option
                 let state_stats = self.explored_states.get_mut(&game_state).unwrap();

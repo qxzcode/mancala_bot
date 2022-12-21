@@ -131,9 +131,7 @@ impl eframe::App for MancalaApp {
                     game_state.valid_moves().nth(index).unwrap()
                 });
 
-                if let Some(score) = game_state.make_move(move_to_make) {
-                    println!("END: {score}");
-                }
+                game_state.make_move(move_to_make);
                 game_state_changed = true;
             }
 
@@ -224,9 +222,7 @@ pub fn add_annotated_game_state(
     }
 
     if let Some(hole_index) = move_to_make {
-        if let Some(score) = game_state.make_move(hole_index) {
-            println!("END: {score}");
-        }
+        game_state.make_move(hole_index);
         return true;
     }
 

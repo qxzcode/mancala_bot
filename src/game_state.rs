@@ -70,11 +70,10 @@ impl GameState {
         }
     }
 
-    /// Given the current player's hole selection, updates the game state;
-    /// or, if the game ends, returns (P1 score) - (P2 score).
+    /// Given the current player's hole selection, updates the game state.
     /// Panics if `hole >= HOLES_PER_SIDE` or the selected hole is empty.
-    #[must_use]
-    pub fn make_move(&mut self, hole: usize) -> Option<i8> {
+    /// If debug assertions are enabled, panics if this state is a terminal state.
+    pub fn make_move(&mut self, hole: usize) {
         debug_assert!(self.result().is_none()); // assert that this is not a terminal state
 
         let cur_player = self.cur_player;
@@ -124,9 +123,8 @@ impl GameState {
             }
         }
 
-        // finally, toggle whose turn it is and return the game result if any
+        // finally, toggle whose turn it is
         self.cur_player = self.cur_player.other();
-        self.result()
     }
 
     /// Returns the final game result Some((P1 score) - (P2 score)), or None
