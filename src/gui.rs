@@ -108,6 +108,8 @@ impl eframe::App for MancalaApp {
 
             let sps = self.worker.samples_per_second().round() as u64;
             ui.label(format!("{} samples/sec", sps.to_formatted_string(&Locale::en)));
+
+            ui.label(format!("Average search depth: {:.1}", self.worker.average_search_depth()));
         });
 
         CentralPanel::default().show(ctx, |ui| {
@@ -269,7 +271,7 @@ where
             let proportion = (value / max_value).clamp(0.0, 1.0);
             let proportion = ui
                 .ctx()
-                .animate_value_with_time(response.id, proportion, 0.1);
+                .animate_value_with_time(response.id, proportion, 0.05);
 
             ui.painter()
                 .rect(outer_rect, rounding, visuals.extreme_bg_color, Stroke::NONE);

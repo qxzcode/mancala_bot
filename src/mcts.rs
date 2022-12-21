@@ -150,20 +150,22 @@ impl MCTSContext {
     }
 
     /// Performs MCTS iterations on the given game state for the given amount of time.
-    /// Returns the number of iterations/samples performed.
-    pub fn ponder(&mut self, game_state: &GameState, duration: Duration) -> usize {
+    /// Returns the number of iterations/samples performed and the sum of the search depths.
+    pub fn ponder(&mut self, game_state: &GameState, duration: Duration) -> (usize, u32) {
         let start_time = Instant::now();
 
         self.current_ply += 1;
         self.prune_explored_states();
 
         let mut num_samples = 0;
+        let mut sum_depths = 0;
         while start_time.elapsed() < duration {
             // sample a sequence of moves and update the tree
-            self.sample_move(game_state.clone());
+            let (_, depth) = self.sample_move(game_state.clone());
             num_samples += 1;
+            sum_depths += depth;
         }
-        num_samples
+        (num_samples, sum_depths)
     }
 
     /// Returns the cached `StateStats` for a given game state.
@@ -174,10 +176,10 @@ impl MCTSContext {
 
     /// Samples a move that a player might make from a state, updating the search tree.
     /// Returns the rollout score for Player 1.
-    fn sample_move(&mut self, game_state: GameState) -> i8 {
+    fn sample_move(&mut self, game_state: GameState) -> (i8, u32) {
         // return the game result if this is a terminal state
         if let Some(score) = game_state.result() {
-            return score;
+            return (score, 0);
         }
 
         let valid_moves = game_state
@@ -190,7 +192,8 @@ impl MCTSContext {
         if num_options == 1 {
             let mut game_state = game_state;
             game_state.make_move(valid_moves[0]);
-            return self.sample_move(game_state);
+            let (score, depth) = self.sample_move(game_state);
+            return (score, depth + 1);
         }
 
         // get which player needs to make a move
@@ -225,7 +228,7 @@ impl MCTSContext {
                 // update the stats for this option
                 update_state_stats(state_stats, option_index, score);
 
-                score
+                (score, 1)
             }
             Entry::Occupied(entry) => {
                 // this state has been seen before; get the stored stats
@@ -246,13 +249,13 @@ impl MCTSContext {
                 // get the next state and recurse (or return the result if the game ended)
                 let mut game_state2 = game_state.clone();
                 game_state2.make_move(next_move);
-                let score = self.sample_move(game_state2);
+                let (score, depth) = self.sample_move(game_state2);
 
                 // update the stats for this option
                 let state_stats = self.explored_states.get_mut(&game_state).unwrap();
                 update_state_stats(state_stats, option_index, score);
 
-                score
+                (score, depth + 1)
             }
         }
     }

@@ -40,6 +40,7 @@ pub struct WorkerData {
     pub cache_size: usize,
     pub cache_size_limit: usize,
     pub samples_per_second: f32,
+    pub average_search_depth: f32,
 }
 
 /// Manages the worker thread performing game computations and facilitates
@@ -69,6 +70,7 @@ impl Worker {
             cache_size: 0,
             cache_size_limit,
             samples_per_second: 0.0,
+            average_search_depth: 0.0,
         }));
         let cur_data2 = cur_data.clone();
 
@@ -99,6 +101,7 @@ impl Worker {
 
                 let mut last_sps_reading = Instant::now();
                 let mut num_samples = 0;
+                let mut sum_depths = 0;
 
                 'main_loop: loop {
                     // handle any messages sent from the main thread
@@ -117,7 +120,10 @@ impl Worker {
                         Some(game_state) if game_state.result().is_none() => {
                             // do some MCTS computation
                             mcts_context.cache_size_limit = cur_data2.lock().cache_size_limit;
-                            num_samples += mcts_context.ponder(game_state, update_delay);
+                            let (ponder_num_samples, ponder_sum_depths) =
+                                mcts_context.ponder(game_state, update_delay);
+                            num_samples += ponder_num_samples;
+                            sum_depths += ponder_sum_depths;
 
                             // update the state data that the main thread can access
                             send_update(&mcts_context, game_state);
@@ -128,12 +134,19 @@ impl Worker {
                     let elapsed = last_sps_reading.elapsed();
                     if elapsed > Duration::from_secs_f32(1.0) {
                         let new_sps = num_samples as f32 / elapsed.as_secs_f32();
+                        let new_asd = if num_samples == 0 {
+                            0.0
+                        } else {
+                            sum_depths as f32 / num_samples as f32
+                        };
                         num_samples = 0;
+                        sum_depths = 0;
                         last_sps_reading = Instant::now();
 
-                        let sps = &mut cur_data2.lock().samples_per_second;
-                        if *sps != new_sps {
-                            *sps = new_sps;
+                        let mut data = cur_data2.lock();
+                        if data.samples_per_second != new_sps {
+                            data.samples_per_second = new_sps;
+                            data.average_search_depth = new_asd;
                             ui_context.request_repaint();
                         }
                     }
@@ -164,16 +177,19 @@ impl Worker {
     }
 
     /// Returns the current worker state data.
+    #[must_use]
     pub fn state_data(&self) -> Option<WorkerStateData> {
         self.cur_state_data.lock().clone()
     }
 
     /// Returns the current size of the worker node cache.
+    #[must_use]
     pub fn cache_size(&self) -> usize {
         self.cur_data.lock().cache_size
     }
 
     /// Returns the size limit for the worker node cache.
+    #[must_use]
     pub fn cache_size_limit(&self) -> usize {
         self.cur_data.lock().cache_size_limit
     }
@@ -184,8 +200,15 @@ impl Worker {
     }
 
     /// Returns the worker's current sample rate.
+    #[must_use]
     pub fn samples_per_second(&self) -> f32 {
         self.cur_data.lock().samples_per_second
+    }
+
+    /// Returns the worker's current average search depth.
+    #[must_use]
+    pub fn average_search_depth(&self) -> f32 {
+        self.cur_data.lock().average_search_depth
     }
 }
 
