@@ -88,12 +88,15 @@ impl Worker {
                         }
                     }
 
-                    if let Some(game_state) = &active_game_state {
-                        // do some MCTS computation
-                        mcts_context.ponder(game_state, update_delay);
+                    match &active_game_state {
+                        Some(game_state) if game_state.result().is_none() => {
+                            // do some MCTS computation
+                            mcts_context.ponder(game_state, update_delay);
 
-                        // update the state data that the main thread can access
-                        send_update(&mcts_context, game_state);
+                            // update the state data that the main thread can access
+                            send_update(&mcts_context, game_state);
+                        }
+                        _ => thread::sleep(update_delay),
                     }
                 }
             })
