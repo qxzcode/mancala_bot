@@ -29,6 +29,7 @@ pub struct MancalaApp {
 
 impl MancalaApp {
     /// Initializes an instance of the app.
+    #[must_use]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         MancalaApp::set_styles(&cc.egui_ctx);
 
@@ -96,7 +97,7 @@ impl eframe::App for MancalaApp {
 
             let size_string = node_cache_size
                 .map_or_else(|| "...".into(), |n| n.to_formatted_string(&Locale::en));
-            ui.label(format!("Node cache size:\n{}", size_string));
+            ui.label(format!("Node cache size:\n{size_string}"));
             ui.add(value_bar(
                 node_cache_size.unwrap_or(0),
                 cache_size_limit,

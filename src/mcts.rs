@@ -6,6 +6,7 @@ use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use std::collections::hash_map::Entry;
+use std::iter;
 use std::time::{Duration, Instant};
 
 use crate::game_state::{GameState, Player, HOLES_PER_SIDE};
@@ -94,9 +95,9 @@ impl StateStats {
     fn new(num_options: usize, current_ply: u32) -> Self {
         debug_assert!(num_options > 1, "Expanded a state with less than 2 options");
         Self {
-            options: ArrayVec::from_iter(
-                std::iter::repeat_with(OptionStats::default).take(num_options),
-            ),
+            options: iter::repeat_with(OptionStats::default)
+                .take(num_options)
+                .collect(),
             num_rollouts: 0,
             last_visit_ply: current_ply,
         }
@@ -163,6 +164,7 @@ impl MCTSContext {
     }
 
     /// Returns the cached `StateStats` for a given game state.
+    #[must_use]
     pub fn stats_for(&self, game_state: &GameState) -> Option<&StateStats> {
         self.explored_states.get(game_state)
     }

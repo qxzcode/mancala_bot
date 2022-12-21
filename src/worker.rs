@@ -49,6 +49,7 @@ pub struct Worker {
 
 impl Worker {
     /// Spawns a new worker thread and returns a `Worker` manager for it.
+    #[must_use]
     pub fn spawn(ui_context: &Context) -> Self {
         let cur_state_and_data = Arc::new(Mutex::new(None));
         let cur_state_and_data2 = cur_state_and_data.clone();
