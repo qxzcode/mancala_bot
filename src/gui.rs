@@ -88,7 +88,9 @@ impl eframe::App for MancalaApp {
 
             ui.label("Node cache size limit:");
             let mut cache_size_limit = self.worker.cache_size_limit();
-            let slider = Slider::new(&mut cache_size_limit, 1..=20_000_000).clamp_to_range(false);
+            let slider = Slider::new(&mut cache_size_limit, 500_000..=20_000_000)
+                .clamp_to_range(false)
+                .logarithmic(true);
             if ui.add(slider).changed() {
                 self.worker.set_cache_size_limit(cache_size_limit);
             }
