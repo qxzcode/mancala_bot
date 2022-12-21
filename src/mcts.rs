@@ -123,6 +123,12 @@ impl MCTSContext {
         self.explored_states.len()
     }
 
+    /// Clears the explored node cache.
+    pub fn clear_cache(&mut self) {
+        self.explored_states = AHashMap::new();
+        self.current_ply = 0;
+    }
+
     fn prune_explored_states(&mut self) {
         const PAST_PLIES_TO_KEEP: u32 = 600;
         if self.current_ply > PAST_PLIES_TO_KEEP {
@@ -243,5 +249,11 @@ impl MCTSContext {
                 score
             }
         }
+    }
+}
+
+impl Default for MCTSContext {
+    fn default() -> Self {
+        Self::new()
     }
 }

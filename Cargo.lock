@@ -989,6 +989,7 @@ dependencies = [
  "egui",
  "itertools",
  "num-format",
+ "num-traits",
  "ordered-float",
  "rand",
  "static_assertions",

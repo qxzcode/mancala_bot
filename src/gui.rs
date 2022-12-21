@@ -4,6 +4,7 @@ use egui::{
 };
 use itertools::Itertools;
 use num_format::{Locale, ToFormattedString};
+use num_traits::{Num, NumCast};
 use rand::{seq::IteratorRandom, thread_rng};
 
 use crate::{
@@ -83,19 +84,28 @@ impl eframe::App for MancalaApp {
 
         SidePanel::left("side_panel").show(ctx, |ui| {
             egui::warn_if_debug_build(ui);
-            ui.heading("Side Panel");
+            ui.heading("Settings");
 
             ui.checkbox(&mut self.debug, "Debug");
             ctx.set_debug_on_hover(self.debug);
 
-            ui.label("MCTS think time (sec):");
-            let mut seconds = 1.0;
-            let slider = Slider::new(&mut seconds, 0.0..=10.0).clamp_to_range(false);
+            ui.label("Node cache size limit:");
+            let mut cache_size_limit = 4_000_000;
+            let slider = Slider::new(&mut cache_size_limit, 1..=30_000_000).clamp_to_range(false);
             ui.add_enabled(false, slider);
 
             let size_string = node_cache_size
                 .map_or_else(|| "...".into(), |n| n.to_formatted_string(&Locale::en));
             ui.label(format!("Node cache size:\n{}", size_string));
+            ui.add(value_bar(
+                node_cache_size.unwrap_or(0),
+                cache_size_limit,
+                Direction::LeftToRight,
+            ));
+
+            if ui.button("Clear cache").clicked() {
+                self.worker.clear_cache();
+            }
         });
 
         CentralPanel::default().show(ctx, |ui| {
@@ -238,7 +248,10 @@ pub fn hole_button(stones: u8) -> impl Widget {
 }
 
 /// A widget that displays a bar indicating a quantity. Fills the available width.
-pub fn value_bar(value: f32, max_value: f32, direction: Direction) -> impl Widget {
+pub fn value_bar<N>(value: N, max_value: N, direction: Direction) -> impl Widget
+where
+    N: Num + NumCast,
+{
     move |ui: &mut Ui| {
         let width = ui.available_size_before_wrap().x;
         let height = ui.spacing().interact_size.y;
@@ -247,6 +260,9 @@ pub fn value_bar(value: f32, max_value: f32, direction: Direction) -> impl Widge
         if ui.is_rect_visible(response.rect) {
             let visuals = ui.style().visuals.clone();
             let rounding = outer_rect.height() / 4.0;
+
+            let value: f32 = num_traits::cast(value).unwrap();
+            let max_value: f32 = num_traits::cast(max_value).unwrap();
             let proportion = (value / max_value).clamp(0.0, 1.0);
             let proportion = ui
                 .ctx()
@@ -295,11 +311,7 @@ fn hole(stones: u8, on_left: bool, stats: Option<HoleStats>) -> impl Widget + '_
                         vec2(32.4, 14.0),
                         Label::new(format!("{:+.1}", stats.stats.expected_score())),
                     );
-                    ui.add(value_bar(
-                        stats.stats.num_rollouts as f32,
-                        stats.parent_rollouts as f32,
-                        direction,
-                    ));
+                    ui.add(value_bar(stats.stats.num_rollouts, stats.parent_rollouts, direction));
                 });
             }
             button_response

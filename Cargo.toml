@@ -13,6 +13,7 @@ itertools = "0.10"
 arrayvec = "0.7"
 ahash = "0.8"
 num-format = "0.4"
+num-traits = "0.2"
 
 # [profile.release]
 # codegen-units = 1

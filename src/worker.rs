@@ -4,7 +4,7 @@ use std::{
         Arc,
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use egui::{mutex::Mutex, Context};
@@ -18,6 +18,9 @@ use crate::{
 enum Message {
     /// Stop the worker thread.
     Stop,
+
+    /// Clear the explored node cache.
+    ClearCache,
 
     /// Set the active game state to work on.
     SetActiveState(GameState),
@@ -76,6 +79,7 @@ impl Worker {
                     for message in receiver.try_iter() {
                         match message {
                             Message::Stop => break 'main_loop,
+                            Message::ClearCache => mcts_context.clear_cache(),
                             Message::SetActiveState(game_state) => {
                                 send_update(&mcts_context, &game_state);
                                 active_game_state = Some(game_state);
@@ -105,6 +109,13 @@ impl Worker {
     pub fn set_active_state(&self, game_state: GameState) {
         self.message_sender
             .send(Message::SetActiveState(game_state))
+            .expect("failed to send to worker thread");
+    }
+
+    /// Clears the explored node cache.
+    pub fn clear_cache(&self) {
+        self.message_sender
+            .send(Message::ClearCache)
             .expect("failed to send to worker thread");
     }
 
