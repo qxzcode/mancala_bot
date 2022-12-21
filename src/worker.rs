@@ -4,7 +4,7 @@ use std::{
         Arc,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use egui::{mutex::Mutex, Context};
@@ -26,12 +26,20 @@ enum Message {
     SetActiveState(GameState),
 }
 
-/// Data representing the state of the worker thread's computation and results.
+/// Data representing the state of the worker thread's computation and results
+/// on the active game state.
 #[derive(Clone)]
-pub struct WorkerData {
+pub struct WorkerStateData {
     pub game_state: GameState,
     pub stats: StateStats,
-    pub node_cache_size: usize,
+}
+
+/// Shared data on the overall state of the worker thread.
+#[derive(Clone)]
+pub struct WorkerData {
+    pub cache_size: usize,
+    pub cache_size_limit: usize,
+    pub samples_per_second: f32,
 }
 
 /// Manages the worker thread performing game computations and facilitates
@@ -43,17 +51,29 @@ pub struct Worker {
     /// Sender for sending control messages to the worker thread.
     message_sender: Sender<Message>,
 
-    /// The latest data from the worker thread.
-    cur_data: Arc<Mutex<Option<WorkerData>>>,
+    /// The latest state data from the worker thread.
+    cur_state_data: Arc<Mutex<Option<WorkerStateData>>>,
+
+    /// The shared overall data for the worker thread.
+    cur_data: Arc<Mutex<WorkerData>>,
 }
 
 impl Worker {
     /// Spawns a new worker thread and returns a `Worker` manager for it.
     #[must_use]
-    pub fn spawn(ui_context: &Context) -> Self {
-        let cur_state_and_data = Arc::new(Mutex::new(None));
-        let cur_state_and_data2 = cur_state_and_data.clone();
+    pub fn spawn(ui_context: &Context, cache_size_limit: usize) -> Self {
+        let cur_state_data = Arc::new(Mutex::new(None));
+        let cur_state_data2 = cur_state_data.clone();
+
+        let cur_data = Arc::new(Mutex::new(WorkerData {
+            cache_size: 0,
+            cache_size_limit,
+            samples_per_second: 0.0,
+        }));
+        let cur_data2 = cur_data.clone();
+
         let (sender, receiver) = mpsc::channel();
+
         let ui_context = ui_context.clone();
 
         let join_handle = thread::Builder::new()
@@ -61,19 +81,24 @@ impl Worker {
             .spawn(move || {
                 println!("Worker thread started");
                 let update_delay = Duration::from_secs_f64(1.0 / 60.0); // delay between UI updates
-                let mut mcts_context = MCTSContext::new();
+                let mut mcts_context = MCTSContext::new(cache_size_limit);
                 let mut active_game_state = None;
 
                 let send_update = |mcts_context: &MCTSContext, game_state: &GameState| {
-                    let new_state_and_data =
-                        mcts_context.stats_for(game_state).map(|stats| WorkerData {
-                            game_state: game_state.clone(),
-                            stats: stats.clone(),
-                            node_cache_size: mcts_context.cache_size(),
-                        });
-                    *cur_state_and_data2.lock() = new_state_and_data;
+                    let new_state_data =
+                        mcts_context
+                            .stats_for(game_state)
+                            .map(|stats| WorkerStateData {
+                                game_state: game_state.clone(),
+                                stats: stats.clone(),
+                            });
+                    *cur_state_data2.lock() = new_state_data;
+                    cur_data2.lock().cache_size = mcts_context.cache_size();
                     ui_context.request_repaint();
                 };
+
+                let mut last_sps_reading = Instant::now();
+                let mut num_samples = 0;
 
                 'main_loop: loop {
                     // handle any messages sent from the main thread
@@ -91,12 +116,26 @@ impl Worker {
                     match &active_game_state {
                         Some(game_state) if game_state.result().is_none() => {
                             // do some MCTS computation
-                            mcts_context.ponder(game_state, update_delay);
+                            mcts_context.cache_size_limit = cur_data2.lock().cache_size_limit;
+                            num_samples += mcts_context.ponder(game_state, update_delay);
 
                             // update the state data that the main thread can access
                             send_update(&mcts_context, game_state);
                         }
                         _ => thread::sleep(update_delay),
+                    }
+
+                    let elapsed = last_sps_reading.elapsed();
+                    if elapsed > Duration::from_secs_f32(1.0) {
+                        let new_sps = num_samples as f32 / elapsed.as_secs_f32();
+                        num_samples = 0;
+                        last_sps_reading = Instant::now();
+
+                        let sps = &mut cur_data2.lock().samples_per_second;
+                        if *sps != new_sps {
+                            *sps = new_sps;
+                            ui_context.request_repaint();
+                        }
                     }
                 }
             })
@@ -105,7 +144,8 @@ impl Worker {
         Self {
             join_handle: Some(join_handle),
             message_sender: sender,
-            cur_data: cur_state_and_data,
+            cur_state_data,
+            cur_data,
         }
     }
 
@@ -123,9 +163,29 @@ impl Worker {
             .expect("failed to send to worker thread");
     }
 
-    /// Gets the current worker data
-    pub fn get_data(&self) -> Option<WorkerData> {
-        self.cur_data.lock().clone()
+    /// Returns the current worker state data.
+    pub fn state_data(&self) -> Option<WorkerStateData> {
+        self.cur_state_data.lock().clone()
+    }
+
+    /// Returns the current size of the worker node cache.
+    pub fn cache_size(&self) -> usize {
+        self.cur_data.lock().cache_size
+    }
+
+    /// Returns the size limit for the worker node cache.
+    pub fn cache_size_limit(&self) -> usize {
+        self.cur_data.lock().cache_size_limit
+    }
+
+    /// Sets the size limit for the worker node cache.
+    pub fn set_cache_size_limit(&self, cache_size_limit: usize) {
+        self.cur_data.lock().cache_size_limit = cache_size_limit;
+    }
+
+    /// Returns the worker's current sample rate.
+    pub fn samples_per_second(&self) -> f32 {
+        self.cur_data.lock().samples_per_second
     }
 }
 

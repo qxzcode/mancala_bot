@@ -34,7 +34,7 @@ impl MancalaApp {
         MancalaApp::set_styles(&cc.egui_ctx);
 
         let initial_game_state = GameState::default();
-        let worker = Worker::spawn(&cc.egui_ctx);
+        let worker = Worker::spawn(&cc.egui_ctx, 2_000_000);
         worker.set_active_state(initial_game_state.clone());
 
         Self {
@@ -77,12 +77,6 @@ impl MancalaApp {
 
 impl eframe::App for MancalaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let worker_data = self.worker.get_data();
-        let node_cache_size = worker_data.as_ref().map(|data| data.node_cache_size);
-        let state_stats = worker_data
-            .filter(|data| &data.game_state == self.active_state())
-            .map(|data| data.stats);
-
         SidePanel::left("side_panel").show(ctx, |ui| {
             egui::warn_if_debug_build(ui);
             ui.heading("Settings");
@@ -90,28 +84,40 @@ impl eframe::App for MancalaApp {
             ui.checkbox(&mut self.debug, "Debug");
             ctx.set_debug_on_hover(self.debug);
 
-            ui.label("Node cache size limit:");
-            let mut cache_size_limit = 4_000_000;
-            let slider = Slider::new(&mut cache_size_limit, 1..=30_000_000).clamp_to_range(false);
-            ui.add_enabled(false, slider);
+            ui.separator();
 
-            let size_string = node_cache_size
-                .map_or_else(|| "...".into(), |n| n.to_formatted_string(&Locale::en));
-            ui.label(format!("Node cache size:\n{size_string}"));
-            ui.add(value_bar(
-                node_cache_size.unwrap_or(0),
-                cache_size_limit,
-                Direction::LeftToRight,
+            ui.label("Node cache size limit:");
+            let mut cache_size_limit = self.worker.cache_size_limit();
+            let slider = Slider::new(&mut cache_size_limit, 1..=20_000_000).clamp_to_range(false);
+            if ui.add(slider).changed() {
+                self.worker.set_cache_size_limit(cache_size_limit);
+            }
+
+            let node_cache_size = self.worker.cache_size();
+            ui.label(format!(
+                "Node cache size:\n{}",
+                node_cache_size.to_formatted_string(&Locale::en)
             ));
+            ui.add(value_bar(node_cache_size, cache_size_limit, Direction::LeftToRight));
 
             if ui.button("Clear cache").clicked() {
                 self.worker.clear_cache();
             }
+
+            ui.separator();
+
+            let sps = self.worker.samples_per_second().round() as u64;
+            ui.label(format!("{} samples/sec", sps.to_formatted_string(&Locale::en)));
         });
 
         CentralPanel::default().show(ctx, |ui| {
             ui.heading("Current Game State");
 
+            let state_stats = self
+                .worker
+                .state_data()
+                .filter(|data| &data.game_state == self.active_state())
+                .map(|data| data.stats);
             let game_state = self.active_state();
 
             let mut game_state_changed =

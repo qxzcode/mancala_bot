@@ -107,16 +107,18 @@ impl StateStats {
 pub struct MCTSContext {
     explored_states: AHashMap<GameState, StateStats>,
     current_ply: u32,
-    last_prune: Instant,
+
+    /// The (approximate) limit on the number of nodes to retain in the cache.
+    pub cache_size_limit: usize,
 }
 
 impl MCTSContext {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(cache_size_limit: usize) -> Self {
         Self {
             explored_states: AHashMap::new(),
             current_ply: 0,
-            last_prune: Instant::now(),
+            cache_size_limit,
         }
     }
 
@@ -133,27 +135,27 @@ impl MCTSContext {
     }
 
     fn prune_explored_states(&mut self) {
-        const PAST_PLIES_TO_KEEP: u32 = 600;
-        if self.current_ply > PAST_PLIES_TO_KEEP {
-            let start_time = Instant::now();
+        if self.cache_size() > self.cache_size_limit {
+            let mut last_visit_plies = self
+                .explored_states
+                .values()
+                .map(|state_stats| state_stats.last_visit_ply)
+                .collect_vec();
+            let index = last_visit_plies.len() / 7; // drop the stalest ~14.3%
+            let (_, &mut cutoff_ply, _) = last_visit_plies.select_nth_unstable(index);
 
-            let cutoff_ply = self.current_ply - PAST_PLIES_TO_KEEP;
             self.explored_states
                 .retain(|_, state_stats| state_stats.last_visit_ply >= cutoff_ply);
-
-            println!("prune_explored_states() took: {:?}", start_time.elapsed());
         }
     }
 
-    /// Perform MCTS iterations on the given game state for the given amount of time.
-    pub fn ponder(&mut self, game_state: &GameState, duration: Duration) {
+    /// Performs MCTS iterations on the given game state for the given amount of time.
+    /// Returns the number of iterations/samples performed.
+    pub fn ponder(&mut self, game_state: &GameState, duration: Duration) -> usize {
         let start_time = Instant::now();
 
         self.current_ply += 1;
-        if self.last_prune.elapsed() > Duration::from_secs_f64(0.5) {
-            self.last_prune = Instant::now();
-            self.prune_explored_states();
-        }
+        self.prune_explored_states();
 
         let mut num_samples = 0;
         while start_time.elapsed() < duration {
@@ -161,6 +163,7 @@ impl MCTSContext {
             self.sample_move(game_state.clone());
             num_samples += 1;
         }
+        num_samples
     }
 
     /// Returns the cached `StateStats` for a given game state.
@@ -252,11 +255,5 @@ impl MCTSContext {
                 score
             }
         }
-    }
-}
-
-impl Default for MCTSContext {
-    fn default() -> Self {
-        Self::new()
     }
 }
