@@ -1,6 +1,7 @@
 use egui::{
-    vec2, Align, Button, CentralPanel, CursorIcon, Direction, FontFamily, FontId, Label, Layout,
-    Rect, Sense, SidePanel, Slider, Stroke, Ui, Widget,
+    vec2, Align, Button, CentralPanel, CursorIcon, Direction, FontFamily, FontId, Frame, Label,
+    Layout, Rect, RichText, Sense, SidePanel, Slider, Stroke, TextStyle, Ui, Widget, WidgetInfo,
+    WidgetText, WidgetType,
 };
 use itertools::Itertools;
 use num_format::{Locale, ToFormattedString};
@@ -114,7 +115,8 @@ impl eframe::App for MancalaApp {
             ui.label(format!("Average search depth: {:.1}", self.worker.average_search_depth()));
         });
 
-        CentralPanel::default().show(ctx, |ui| {
+        let frame = Frame::central_panel(&ctx.style()).inner_margin(10.0);
+        CentralPanel::default().frame(frame).show(ctx, |ui| {
             ui.heading("Current Game State");
 
             let state_stats = self
@@ -177,15 +179,14 @@ pub fn add_annotated_game_state(
     let hole_stats = hole_stats; // make immutable
 
     ui.vertical_centered(|ui| {
-        if game_state.result().is_some() {
-            ui.set_enabled(false);
-        }
+        let is_game_over = game_state.result().is_some();
+        ui.set_enabled(!is_game_over);
 
         ui.add_space(10.0);
         ui.spacing_mut().item_spacing.y = 10.0;
 
-        ui.label("Player 2");
-        ui.label(game_state.p2_state.store.to_string());
+        ui.add(player_label("Player 2", game_state.cur_player == Player::Player2));
+        ui.add(store_label(game_state.p2_state.store));
 
         ui.columns(2, |columns| {
             let mut add_holes = |ui: &mut Ui, player: Player| {
@@ -202,7 +203,7 @@ pub fn add_annotated_game_state(
                 ui.with_layout(layout, |ui| {
                     for (hole_index, &stones) in player_state.holes.iter().enumerate() {
                         let stats = hole_stats[hole_index].filter(|_| is_active_side);
-                        if ui.add(hole(stones, on_left, stats)).clicked() {
+                        if ui.add(hole(stones, on_left, stats, is_game_over)).clicked() {
                             move_to_make = Some(hole_index);
                         }
                     }
@@ -215,8 +216,8 @@ pub fn add_annotated_game_state(
             add_holes(&mut columns[0], Player::Player1);
         });
 
-        ui.label(game_state.p1_state.store.to_string());
-        ui.label("Player 1");
+        ui.add(store_label(game_state.p1_state.store));
+        ui.add(player_label("Player 1", game_state.cur_player == Player::Player1));
 
         ui.add_space(0.0); // actually adds item_spacing
     });
@@ -240,14 +241,76 @@ pub fn add_annotated_game_state(
     false
 }
 
+/// A widget that displays a player's name / identifier.
+pub fn player_label(name: impl ToString, is_their_turn: bool) -> impl Widget {
+    move |ui: &mut Ui| {
+        if is_their_turn && ui.is_enabled() {
+            ui.strong(name.to_string())
+        } else {
+            ui.label(name.to_string())
+        }
+    }
+}
+
+/// A widget that displays a player's store.
+pub fn store_label(stones: u8) -> impl Widget {
+    move |ui: &mut Ui| {
+        let base_size = vec2(22.0, 20.0);
+        let padding = vec2(4.0, 4.0);
+        let label_size = base_size + padding;
+        let label_size = vec2(label_size.x * 2.0 + 6.0, label_size.y);
+
+        let text = stones.to_string();
+
+        let (rect, response) = ui.allocate_exact_size(label_size, Sense::hover());
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, &text));
+
+        if ui.is_rect_visible(response.rect) {
+            let visuals = ui.style().interact(&response);
+
+            if ui.visuals().button_frame {
+                let fill = visuals.bg_fill;
+                let stroke = visuals.bg_stroke;
+                ui.painter()
+                    .rect(rect.expand(visuals.expansion), visuals.rounding, fill, stroke);
+            }
+
+            let text_color = if ui.is_enabled() {
+                visuals.text_color()
+            } else {
+                ui.visuals().strong_text_color()
+            };
+
+            let text: WidgetText = text.into();
+            let text = text.into_galley(ui, None, f32::INFINITY, TextStyle::Button);
+            let text_pos = ui
+                .layout()
+                .align_size_within_rect(text.size(), rect.shrink2(ui.spacing().button_padding))
+                .min;
+            text.paint_with_color_override(ui.painter(), text_pos, text_color);
+        }
+
+        response
+    }
+}
+
 /// A widget that displays the button representing a hole on the game board.
-pub fn hole_button(stones: u8) -> impl Widget {
+pub fn hole_button(stones: u8, is_game_over: bool) -> impl Widget {
     move |ui: &mut Ui| {
         let base_size = vec2(22.0, 20.0);
         let padding = vec2(4.0, 4.0);
         let button_size = base_size + padding;
 
-        let button = Button::new(stones.to_string()).min_size(button_size);
+        let text = stones.to_string();
+        let text = if is_game_over && stones != 0 {
+            RichText::new(text).color(ui.visuals().strong_text_color())
+        } else {
+            text.into()
+        };
+
+        let button = Button::new(text)
+            .min_size(button_size)
+            .frame(!is_game_over || stones > 0);
 
         ui.add_enabled(stones > 0, button)
             .on_hover_cursor(CursorIcon::PointingHand)
@@ -265,7 +328,7 @@ where
         let (outer_rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
 
         if ui.is_rect_visible(response.rect) {
-            let visuals = ui.style().visuals.clone();
+            let visuals = &ui.style().visuals;
             let rounding = outer_rect.height() / 4.0;
 
             let value: f32 = num_traits::cast(value).unwrap();
@@ -301,7 +364,12 @@ struct HoleStats<'a> {
 }
 
 /// A widget that displays a hole in the game board along with its extra information.
-fn hole(stones: u8, on_left: bool, stats: Option<HoleStats>) -> impl Widget + '_ {
+fn hole(
+    stones: u8,
+    on_left: bool,
+    stats: Option<HoleStats>,
+    is_game_over: bool,
+) -> impl Widget + '_ {
     move |ui: &mut Ui| {
         let size = vec2(ui.available_width(), 22.0 + 4.0);
         let direction = if on_left {
@@ -311,9 +379,10 @@ fn hole(stones: u8, on_left: bool, stats: Option<HoleStats>) -> impl Widget + '_
         };
         let layout = Layout::from_main_dir_and_cross_align(direction, Align::Center);
         ui.allocate_ui_with_layout(size, layout, |ui| {
-            let button_response = ui.add(hole_button(stones));
+            let button_response = ui.add(hole_button(stones, is_game_over));
             if let Some(stats) = stats {
                 ui.add_visible_ui(ui.is_enabled(), |ui| {
+                    ui.add_space(22.0 + 4.0);
                     ui.add_sized(
                         vec2(32.4, 14.0),
                         Label::new(format!("{:+.1}", stats.stats.expected_score())),
