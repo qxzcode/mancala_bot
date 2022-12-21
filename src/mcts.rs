@@ -2,7 +2,7 @@ use ahash::AHashMap;
 use arrayvec::ArrayVec;
 use itertools::Itertools;
 use ordered_float::NotNan;
-use rand::seq::{IteratorRandom, SliceRandom};
+use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use std::collections::hash_map::Entry;
@@ -73,7 +73,7 @@ impl OptionStats {
     /// A variant of the PUCT score, similar to that used in AlphaZero.
     #[must_use]
     pub fn puct_score(&self, parent_rollouts: u32) -> NotNan<f32> {
-        let exploration_rate = 15.0; // TODO: make this a tunable parameter
+        let exploration_rate = 100.0; // TODO: make this a tunable parameter
         let exploration_score =
             exploration_rate * (parent_rollouts as f32).sqrt() / ((1 + self.num_rollouts) as f32);
         self.expected_score() + exploration_score
@@ -81,9 +81,9 @@ impl OptionStats {
 }
 
 #[derive(Debug, Clone)]
-struct StateStats {
-    options: ArrayVec<OptionStats, HOLES_PER_SIDE>,
-    num_rollouts: u32,
+pub struct StateStats {
+    pub options: ArrayVec<OptionStats, HOLES_PER_SIDE>,
+    pub num_rollouts: u32,
     last_visit_ply: u32,
 }
 
@@ -102,19 +102,18 @@ impl StateStats {
 }
 
 pub struct MCTSContext {
-    pub choice_time_limit: Duration,
-
     explored_states: AHashMap<GameState, StateStats>,
     current_ply: u32,
+    last_prune: Instant,
 }
 
 impl MCTSContext {
     #[must_use]
-    pub fn new(choice_time_limit: Duration) -> Self {
+    pub fn new() -> Self {
         Self {
-            choice_time_limit,
             explored_states: AHashMap::new(),
             current_ply: 0,
+            last_prune: Instant::now(),
         }
     }
 
@@ -124,64 +123,40 @@ impl MCTSContext {
         self.explored_states.len()
     }
 
-    #[must_use]
-    fn get_root_option_stats(&self, game_state: &GameState) -> (u32, &[OptionStats]) {
-        self.explored_states
-            .get(game_state)
-            .map(|stats| (stats.num_rollouts, stats.options.as_ref()))
-            .expect("root state not explored")
-    }
-
     fn prune_explored_states(&mut self) {
-        const PAST_PLIES_TO_KEEP: u32 = 5;
+        const PAST_PLIES_TO_KEEP: u32 = 600;
         if self.current_ply > PAST_PLIES_TO_KEEP {
+            let start_time = Instant::now();
+
             let cutoff_ply = self.current_ply - PAST_PLIES_TO_KEEP;
             self.explored_states
                 .retain(|_, state_stats| state_stats.last_visit_ply >= cutoff_ply);
+
+            println!("prune_explored_states() took: {:?}", start_time.elapsed());
         }
     }
 
-    /// Runs MCTS to choose an option.
-    pub fn mcts_choose(&mut self, game_state: &GameState) -> usize {
-        // return immediately without searching if there's only one option
-        if let Ok(only_option) = game_state.valid_moves().exactly_one() {
-            return only_option;
-        }
-
+    /// Perform MCTS iterations on the given game state for the given amount of time.
+    pub fn ponder(&mut self, game_state: &GameState, duration: Duration) {
         let start_time = Instant::now();
 
         self.current_ply += 1;
-        self.prune_explored_states();
+        if self.last_prune.elapsed() > Duration::from_secs_f64(0.5) {
+            self.last_prune = Instant::now();
+            self.prune_explored_states();
+        }
 
-        let mut last_print_time = start_time;
         let mut num_samples = 0;
-        while start_time.elapsed() < self.choice_time_limit {
+        while start_time.elapsed() < duration {
             // sample a sequence of moves and update the tree
             self.sample_move(game_state.clone());
             num_samples += 1;
-
-            // update the live stats display
-            let now = Instant::now();
-            let elapsed = now.duration_since(last_print_time);
-            if elapsed > Duration::from_millis(100) {
-                // TODO: show live stats in the GUI
-                println!(
-                    "Thinking, num_samples={num_samples}: [{}]",
-                    self.get_root_option_stats(game_state)
-                        .1
-                        .iter()
-                        .map(|x| format!("{:.2}", x.expected_score().into_inner()))
-                        .join(", ")
-                );
-                last_print_time = now;
-            }
         }
+    }
 
-        // return a random best (maximum visit count) choice
-        let index = get_best_options(self.get_root_option_stats(game_state).1)
-            .choose(&mut thread_rng())
-            .unwrap();
-        game_state.valid_moves().nth(index).unwrap()
+    /// Returns the cached `StateStats` for a given game state.
+    pub fn stats_for(&self, game_state: &GameState) -> Option<&StateStats> {
+        self.explored_states.get(game_state)
     }
 
     /// Samples a move that a player might make from a state, updating the search tree.

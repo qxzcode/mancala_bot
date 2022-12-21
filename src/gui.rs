@@ -1,14 +1,15 @@
-use std::time::Duration;
-
 use egui::{
-    vec2, Align, Button, CentralPanel, CursorIcon, Direction, FontFamily, FontId, Layout, Rect,
-    Response, Sense, SidePanel, Slider, Stroke, Ui, Widget,
+    vec2, Align, Button, CentralPanel, CursorIcon, Direction, FontFamily, FontId, Label, Layout,
+    Rect, Sense, SidePanel, Slider, Stroke, Ui, Widget,
 };
-use rand::seq::IteratorRandom;
+use itertools::Itertools;
+use num_format::{Locale, ToFormattedString};
+use rand::{seq::IteratorRandom, thread_rng};
 
 use crate::{
-    game_state::{GameState, Player, PlayerState},
-    mcts::MCTSContext,
+    game_state::{GameState, Player, HOLES_PER_SIDE},
+    mcts::{get_best_options, OptionStats, StateStats},
+    worker::Worker,
 };
 
 pub struct MancalaApp {
@@ -21,19 +22,24 @@ pub struct MancalaApp {
     /// The index of the active game state in `self.history`.
     active_state_index: usize,
 
-    /// The current MCTS execution context.
-    mcts_context: MCTSContext,
+    /// The manager for the worker thread.
+    worker: Worker,
 }
 
 impl MancalaApp {
     /// Initializes an instance of the app.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         MancalaApp::set_styles(&cc.egui_ctx);
+
+        let initial_game_state = GameState::default();
+        let worker = Worker::spawn(&cc.egui_ctx);
+        worker.set_active_state(initial_game_state.clone());
+
         Self {
             debug: false,
-            history: vec![GameState::default()],
+            history: vec![initial_game_state],
             active_state_index: 0,
-            mcts_context: MCTSContext::new(Duration::from_secs_f64(1.0)),
+            worker,
         }
     }
 
@@ -69,109 +75,152 @@ impl MancalaApp {
 
 impl eframe::App for MancalaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let Self { debug, mcts_context, .. } = self;
+        let worker_data = self.worker.get_data();
+        let node_cache_size = worker_data.as_ref().map(|data| data.node_cache_size);
+        let state_stats = worker_data
+            .filter(|data| &data.game_state == self.active_state())
+            .map(|data| data.stats);
 
         SidePanel::left("side_panel").show(ctx, |ui| {
             egui::warn_if_debug_build(ui);
             ui.heading("Side Panel");
 
-            ui.checkbox(debug, "Debug");
-            ctx.set_debug_on_hover(*debug);
+            ui.checkbox(&mut self.debug, "Debug");
+            ctx.set_debug_on_hover(self.debug);
 
             ui.label("MCTS think time (sec):");
-            let mut seconds = mcts_context.choice_time_limit.as_secs_f64();
+            let mut seconds = 1.0;
             let slider = Slider::new(&mut seconds, 0.0..=10.0).clamp_to_range(false);
-            if ui.add(slider).changed() {
-                mcts_context.choice_time_limit = Duration::from_secs_f64(seconds);
-            }
+            ui.add_enabled(false, slider);
 
-            ui.label(format!("Node cache size:\n{}", mcts_context.cache_size()));
+            let size_string = node_cache_size
+                .map_or_else(|| "...".into(), |n| n.to_formatted_string(&Locale::en));
+            ui.label(format!("Node cache size:\n{}", size_string));
         });
 
         CentralPanel::default().show(ctx, |ui| {
             ui.heading("Current Game State");
 
-            let old_cur_player = self.active_state().cur_player;
+            let game_state = self.active_state();
 
-            ui.add(self.active_state());
+            let mut game_state_changed =
+                add_annotated_game_state(ui, game_state, state_stats.as_ref());
 
-            if ui.button("MCTS move").clicked() {
-                let game_state = self.active_state().clone();
-                let move_to_make = self.mcts_context.mcts_choose(&game_state);
-                if let Some(score) = self.active_state().make_move(move_to_make) {
+            let is_game_over = game_state.result().is_some();
+            let single_valid_move = game_state.valid_moves().exactly_one().ok();
+            let enable_mcts_button =
+                !is_game_over && (state_stats.is_some() || single_valid_move.is_some());
+
+            let button = Button::new("Best move (by MCTS)");
+            if ui.add_enabled(enable_mcts_button, button).clicked() {
+                let move_to_make = single_valid_move.unwrap_or_else(|| {
+                    // pick a random best (maximum visit count) choice
+                    let index = get_best_options(&state_stats.unwrap().options)
+                        .choose(&mut thread_rng())
+                        .unwrap();
+                    game_state.valid_moves().nth(index).unwrap()
+                });
+
+                if let Some(score) = game_state.make_move(move_to_make) {
                     println!("END: {score}");
                 }
+                game_state_changed = true;
             }
 
-            // if the current player has changed, reset animations to prevent briefly leaking
-            // previous values from the last time this player was active
-            if self.active_state().cur_player != old_cur_player {
+            if game_state_changed {
+                let active_state = game_state.clone();
+                self.worker.set_active_state(active_state);
                 ui.ctx().clear_animations();
             }
         });
     }
 }
 
-impl Widget for &mut GameState {
-    fn ui(self, ui: &mut Ui) -> Response {
-        let mut move_to_make = None;
+/// Adds a widget that displays the game state, annotated with extra information.
+/// Returns whether the game state has changed.
+pub fn add_annotated_game_state(
+    ui: &mut Ui,
+    game_state: &mut GameState,
+    stats: Option<&StateStats>,
+) -> bool {
+    let mut move_to_make = None;
 
-        let res = ui
-            .vertical_centered(|ui| {
-                if self.result().is_some() {
-                    ui.set_enabled(false);
-                }
-
-                ui.add_space(10.0);
-                ui.spacing_mut().item_spacing.y = 10.0;
-
-                ui.label("Player 2");
-                ui.label(self.p2_state.store.to_string());
-
-                ui.columns(2, |columns| {
-                    let mut add_holes = |ui: &mut Ui, player_state: &PlayerState, on_left: bool| {
-                        for (hole_index, &stones) in player_state.holes.iter().enumerate() {
-                            if ui.add(hole(stones, on_left)).clicked() {
-                                move_to_make = Some(hole_index);
-                            }
-                        }
-                    };
-
-                    columns[1].set_enabled(self.cur_player == Player::Player2);
-                    columns[1].with_layout(Layout::top_down(Align::LEFT), |ui| {
-                        add_holes(ui, &self.p2_state, false);
-                    });
-
-                    columns[0].set_enabled(self.cur_player == Player::Player1);
-                    columns[0].set_height(columns[1].min_rect().height());
-                    columns[0].with_layout(Layout::bottom_up(Align::RIGHT), |ui| {
-                        add_holes(ui, &self.p1_state, true);
-                    });
-                });
-
-                ui.label(self.p1_state.store.to_string());
-                ui.label("Player 1");
-
-                ui.add_space(0.0); // actually adds item_spacing
-            })
-            .response;
-
-        if ui.button("Random move").clicked() {
-            move_to_make = self
-                .player(self.cur_player)
-                .non_empty_holes()
-                .choose(&mut rand::thread_rng());
+    // get the stats for each hole
+    let mut hole_stats = [None; HOLES_PER_SIDE];
+    if let Some(stats) = stats {
+        for (hole_index, move_stats) in game_state.valid_moves().zip_eq(&stats.options) {
+            hole_stats[hole_index] = Some(HoleStats {
+                parent_rollouts: stats.num_rollouts,
+                stats: move_stats,
+            });
         }
-
-        if let Some(hole_index) = move_to_make {
-            println!("{self:?}");
-            if let Some(score) = self.make_move(hole_index) {
-                println!("END: {score}");
-            }
-        }
-
-        res
     }
+    let hole_stats = hole_stats; // make immutable
+
+    ui.vertical_centered(|ui| {
+        if game_state.result().is_some() {
+            ui.set_enabled(false);
+        }
+
+        ui.add_space(10.0);
+        ui.spacing_mut().item_spacing.y = 10.0;
+
+        ui.label("Player 2");
+        ui.label(game_state.p2_state.store.to_string());
+
+        ui.columns(2, |columns| {
+            let mut add_holes = |ui: &mut Ui, player: Player| {
+                let on_left = player == Player::Player1;
+                let player_state = game_state.player(player);
+                let layout = if on_left {
+                    Layout::bottom_up(Align::RIGHT)
+                } else {
+                    Layout::top_down(Align::LEFT)
+                };
+                let is_active_side = player == game_state.cur_player;
+
+                ui.set_enabled(is_active_side);
+                ui.with_layout(layout, |ui| {
+                    for (hole_index, &stones) in player_state.holes.iter().enumerate() {
+                        let stats = hole_stats[hole_index].filter(|_| is_active_side);
+                        if ui.add(hole(stones, on_left, stats)).clicked() {
+                            move_to_make = Some(hole_index);
+                        }
+                    }
+                });
+            };
+
+            add_holes(&mut columns[1], Player::Player2);
+
+            columns[0].set_height(columns[1].min_rect().height());
+            add_holes(&mut columns[0], Player::Player1);
+        });
+
+        ui.label(game_state.p1_state.store.to_string());
+        ui.label("Player 1");
+
+        ui.add_space(0.0); // actually adds item_spacing
+    });
+
+    let is_game_over = game_state.result().is_some();
+    if ui
+        .add_enabled(!is_game_over, Button::new("Random move"))
+        .clicked()
+    {
+        move_to_make = game_state
+            .player(game_state.cur_player)
+            .non_empty_holes()
+            .choose(&mut rand::thread_rng());
+    }
+
+    if let Some(hole_index) = move_to_make {
+        if let Some(score) = game_state.make_move(hole_index) {
+            println!("END: {score}");
+        }
+        return true;
+    }
+
+    false
 }
 
 /// A widget that displays the button representing a hole on the game board.
@@ -222,8 +271,14 @@ pub fn value_bar(value: f32, max_value: f32, direction: Direction) -> impl Widge
     }
 }
 
+#[derive(Clone, Copy)]
+struct HoleStats<'a> {
+    parent_rollouts: u32,
+    stats: &'a OptionStats,
+}
+
 /// A widget that displays a hole in the game board along with its extra information.
-pub fn hole(stones: u8, on_left: bool) -> impl Widget {
+fn hole(stones: u8, on_left: bool, stats: Option<HoleStats>) -> impl Widget + '_ {
     move |ui: &mut Ui| {
         let size = vec2(ui.available_width(), 22.0 + 4.0);
         let direction = if on_left {
@@ -234,7 +289,19 @@ pub fn hole(stones: u8, on_left: bool) -> impl Widget {
         let layout = Layout::from_main_dir_and_cross_align(direction, Align::Center);
         ui.allocate_ui_with_layout(size, layout, |ui| {
             let button_response = ui.add(hole_button(stones));
-            ui.add_visible(ui.is_enabled(), value_bar(stones as f32, 6.0, direction));
+            if let Some(stats) = stats {
+                ui.add_visible_ui(ui.is_enabled(), |ui| {
+                    ui.add_sized(
+                        vec2(32.4, 14.0),
+                        Label::new(format!("{:+.1}", stats.stats.expected_score())),
+                    );
+                    ui.add(value_bar(
+                        stats.stats.num_rollouts as f32,
+                        stats.parent_rollouts as f32,
+                        direction,
+                    ));
+                });
+            }
             button_response
         })
         .inner

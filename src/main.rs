@@ -1,6 +1,7 @@
 pub mod game_state;
 pub mod gui;
 pub mod mcts;
+pub mod worker;
 
 fn main() {
     let native_options = eframe::NativeOptions::default();
