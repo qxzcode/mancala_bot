@@ -83,6 +83,7 @@ impl GameState {
         let mut num_stones = mem::take(&mut self.player_mut(cur_player).holes[hole]) as usize;
         assert!(num_stones > 0, "selected an empty hole");
 
+        // repeatedly place stones in successive spots
         let mut player = self.cur_player;
         let mut hole = Some(hole);
 
@@ -95,8 +96,14 @@ impl GameState {
                     self.player_mut(player).holes[HOLES_PER_SIDE - 1] += 1;
                 }
                 Some(0) => {
-                    hole = None;
-                    self.player_mut(player).store += 1;
+                    if player != cur_player {
+                        hole = Some(HOLES_PER_SIDE - 1);
+                        player = player.other();
+                        self.player_mut(player).holes[HOLES_PER_SIDE - 1] += 1;
+                    } else {
+                        hole = None;
+                        self.player_mut(player).store += 1;
+                    }
                 }
                 Some(hole) => {
                     *hole -= 1;
@@ -106,6 +113,7 @@ impl GameState {
             num_stones -= 1;
         }
 
+        // handle conditions based on where the last stone was placed
         if player == cur_player {
             if let Some(hole) = hole {
                 if self.player(cur_player).holes[hole] == 1 {
