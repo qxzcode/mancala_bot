@@ -1,4 +1,4 @@
-use std::mem;
+use std::{fmt, mem};
 
 use static_assertions::const_assert;
 
@@ -16,6 +16,15 @@ impl Player {
             Player::Player1 => Player::Player2,
             Player::Player2 => Player::Player1,
         }
+    }
+}
+
+impl fmt::Display for Player {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Player::Player1 => "Player 1",
+            Player::Player2 => "Player 2",
+        })
     }
 }
 
@@ -180,6 +189,12 @@ impl PlayerState {
     #[must_use]
     pub fn stones_in_holes(&self) -> u8 {
         self.holes.iter().sum()
+    }
+
+    /// Returns this player's score (assuming this state is at the end of a game).
+    #[must_use]
+    pub fn score(&self) -> u8 {
+        self.store + self.stones_in_holes()
     }
 
     /// Returns an iterator over the indices of the non-empty holes on this

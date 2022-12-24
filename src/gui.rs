@@ -126,29 +126,57 @@ impl eframe::App for MancalaApp {
                 .map(|data| data.stats);
             let game_state = self.active_state();
 
-            let mut game_state_changed =
-                add_annotated_game_state(ui, game_state, state_stats.as_ref());
+            let mut move_to_make = None;
 
-            let is_game_over = game_state.result().is_some();
-            let single_valid_move = game_state.valid_moves().exactly_one().ok();
-            let enable_mcts_button =
-                !is_game_over && (state_stats.is_some() || single_valid_move.is_some());
+            add_annotated_game_state(ui, game_state, state_stats.as_ref(), |hole| {
+                move_to_make = Some(hole);
+            });
 
-            let button = Button::new("Best move (by MCTS)");
-            if ui.add_enabled(enable_mcts_button, button).clicked() {
-                let move_to_make = single_valid_move.unwrap_or_else(|| {
-                    // pick a random best (maximum visit count) choice
-                    let index = get_best_options(&state_stats.unwrap().options)
-                        .choose(&mut thread_rng())
-                        .unwrap();
-                    game_state.valid_moves().nth(index).unwrap()
+            if let Some(final_score) = game_state.result() {
+                // the game is over; display the final score information
+                ui.columns(2, |columns| {
+                    let p1_score = game_state.player(Player::Player1).score();
+                    let p2_score = game_state.player(Player::Player2).score();
+                    let mut add_player_score = |col: usize, player, score, delta| {
+                        columns[col].vertical_centered(|ui| {
+                            ui.label(format!("{}:", player));
+                            ui.strong(format!("{score}"));
+                            if delta > 0 {
+                                ui.label(format!("(wins by {delta})"));
+                            }
+                        });
+                    };
+                    add_player_score(0, Player::Player1, p1_score, final_score);
+                    add_player_score(1, Player::Player2, p2_score, -final_score);
                 });
+            } else {
+                // the game is not over; show helper buttons to make moves
+                ui.vertical_centered(|ui| {
+                    if ui.button("Random move").clicked() {
+                        move_to_make = game_state
+                            .player(game_state.cur_player)
+                            .non_empty_holes()
+                            .choose(&mut rand::thread_rng());
+                    }
 
-                game_state.make_move(move_to_make);
-                game_state_changed = true;
+                    let single_valid_move = game_state.valid_moves().exactly_one().ok();
+                    let enable_mcts_button = state_stats.is_some() || single_valid_move.is_some();
+
+                    let button = Button::new("Best move (by MCTS)");
+                    if ui.add_enabled(enable_mcts_button, button).clicked() {
+                        move_to_make = Some(single_valid_move.unwrap_or_else(|| {
+                            // pick a random best (maximum visit count) choice
+                            let index = get_best_options(&state_stats.unwrap().options)
+                                .choose(&mut thread_rng())
+                                .unwrap();
+                            game_state.valid_moves().nth(index).unwrap()
+                        }));
+                    }
+                });
             }
 
-            if game_state_changed {
+            if let Some(hole_index) = move_to_make {
+                game_state.make_move(hole_index);
                 let active_state = game_state.clone();
                 self.worker.set_active_state(active_state);
                 ui.ctx().clear_animations();
@@ -158,14 +186,12 @@ impl eframe::App for MancalaApp {
 }
 
 /// Adds a widget that displays the game state, annotated with extra information.
-/// Returns whether the game state has changed.
 pub fn add_annotated_game_state(
     ui: &mut Ui,
-    game_state: &mut GameState,
+    game_state: &GameState,
     stats: Option<&StateStats>,
-) -> bool {
-    let mut move_to_make = None;
-
+    mut make_move: impl FnMut(usize),
+) {
     // get the stats for each hole
     let mut hole_stats = [None; HOLES_PER_SIDE];
     if let Some(stats) = stats {
@@ -204,7 +230,7 @@ pub fn add_annotated_game_state(
                     for (hole_index, &stones) in player_state.holes.iter().enumerate() {
                         let stats = hole_stats[hole_index].filter(|_| is_active_side);
                         if ui.add(hole(stones, on_left, stats, is_game_over)).clicked() {
-                            move_to_make = Some(hole_index);
+                            make_move(hole_index);
                         }
                     }
                 });
@@ -221,24 +247,6 @@ pub fn add_annotated_game_state(
 
         ui.add_space(0.0); // actually adds item_spacing
     });
-
-    let is_game_over = game_state.result().is_some();
-    if ui
-        .add_enabled(!is_game_over, Button::new("Random move"))
-        .clicked()
-    {
-        move_to_make = game_state
-            .player(game_state.cur_player)
-            .non_empty_holes()
-            .choose(&mut rand::thread_rng());
-    }
-
-    if let Some(hole_index) = move_to_make {
-        game_state.make_move(hole_index);
-        return true;
-    }
-
-    false
 }
 
 /// A widget that displays a player's name / identifier.
