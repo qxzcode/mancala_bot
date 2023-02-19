@@ -131,7 +131,13 @@ impl GameState {
                     let other_hole_idx = (HOLES_PER_SIDE - 1) - hole;
                     let captured_stones =
                         mem::take(&mut self.player_mut(cur_player.other()).holes[other_hole_idx]);
-                    self.player_mut(cur_player).store += captured_stones;
+                    if captured_stones > 0 {
+                        // additionally capture the 1 stone that landed in the empty hole
+                        self.player_mut(cur_player).holes[hole] = 0;
+                        let captured_stones = captured_stones + 1;
+
+                        self.player_mut(cur_player).store += captured_stones;
+                    }
                 }
             } else {
                 // the last stone landed in the current player's store;
